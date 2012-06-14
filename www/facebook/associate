@@ -1,0 +1,60 @@
+"""Associate a Facebook account with a Gittip account.
+
+First we do the OAuth dance with Facebook. Once we've authenticated the user
+against Facebook, we record them in our user_info table. This table contains
+information for Facebook users whether or not they are explicit participants in
+the Gittip economy.
+
+"""
+import requests
+from aspen import json, log, Response
+from gittip.networks import github
+from gittip.authentication import User 
+
+# ========================== ^L
+
+
+# Do the dance.
+# =============
+# https://developers.facebook.com/docs/authentication/server-side/
+
+log("Doing an OAuth dance with Facebook.") 
+
+if 'error' in qs:
+    raise Response(500, str(qs['error']))
+
+data = { 'code': qs['code'].encode('US-ASCII')
+       , 'client_id': website.github_client_id
+       , 'client_secret': website.github_client_secret
+        }
+
+r = requests.post("https://github.com/login/oauth/access_token", data=data)
+assert r.status_code == 200, (r.status_code, r.text)
+
+back = dict([pair.split('=') for pair in r.text.split('&')]) # XXX
+if 'error' in back:
+    raise Response(400, back['error'].encode('utf-8'))
+assert back.get('token_type', '') == 'bearer', back
+access_token = back['access_token']
+
+r = requests.get( "https://api.github.com/user"
+                , headers={'Authorization': 'token %s' % access_token}
+                 )
+assert r.status_code == 200, (r.status_code, r.text)
+user_info = json.loads(r.text)
+log("Done with OAuth dance with Facebook for %s (%s)." 
+    % (user_info['login'], user_info['id']))
+
+
+# Bind to a participant.
+# ======================
+# Redirect to the new participant, or to the one they came from.
+
+participant_id = github.upsert(user_info, claim=True)
+user = User.from_id(participant_id)
+then = qs.get('then')
+if then is not None:
+    participant_id = 'github/' + then
+request.redirect('/%s/' % participant_id)
+
+# ========================== ^L text/plain
